@@ -29,8 +29,8 @@ export interface StatsResponse {
 }
 
 export async function fetchStats(exportZip: File): Promise<StatsResponse> {
-  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
-  const statsUrl = new URL("/api/stats", apiBaseUrl || window.location.origin).toString();
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").trim();
+  const statsUrl = apiBaseUrl ? new URL("/api/stats", apiBaseUrl).toString() : "/api/stats";
 
   const response = await fetch(statsUrl, { method: "POST", body: exportZip });
   if (!response.ok) {
