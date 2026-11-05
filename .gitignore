@@ -1,0 +1,56 @@
+# ---------- Personal Spotify data: never commit ----------
+Streaming_History*
+Spotify Extended Streaming History*/
+my_spotify_data/
+local-data/
+*.zip
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---------- Azure Functions ----------
+api/local.settings.json
+api/.python_packages/
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/
+__azurite__/
+.azure/
+
+# ---------- Node / React / Vite ----------
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# ---------- Environment and secrets ----------
+.env
+.env.*
+!.env.example
+
+# ---------- Editors and OS ----------
+.devcontainer/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
