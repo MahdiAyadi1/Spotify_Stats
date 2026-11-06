@@ -13,6 +13,7 @@ import zipfile
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from pathlib import PurePosixPath
 from typing import IO
@@ -22,6 +23,7 @@ from spotify_stats.constants import (
     MAX_HISTORY_FILE_BYTES,
     MAX_TOTAL_HISTORY_BYTES,
 )
+from spotify_stats.platforms import platform_family
 
 
 class InvalidExportError(ValueError):
@@ -38,6 +40,13 @@ class TrackEntry:
     track_name: str
     artist_name: str
     ms_played: int
+    ended_at: datetime  # timezone-aware UTC: when the track stopped playing
+    album_name: str = ""
+    reason_start: str = "unknown"
+    reason_end: str = "unknown"
+    shuffle: bool = False
+    platform: str = "Other"  # family such as "iOS" or "Windows", see platforms.py
+    offline: bool = False
 
 
 def iter_track_entries(export_zip: IO[bytes]) -> Iterator[TrackEntry]:
@@ -45,12 +54,7 @@ def iter_track_entries(export_zip: IO[bytes]) -> Iterator[TrackEntry]:
 
     Raises InvalidExportError or ExportTooLargeError while iterating.
     """
-    try:
-        archive = zipfile.ZipFile(export_zip)
-    except zipfile.BadZipFile:
-        raise InvalidExportError("The upload is not a ZIP file.") from None
-
-    with archive:
+    with _open_archive(export_zip) as archive:
         history_files = _audio_history_files(archive)
         if not history_files:
             raise InvalidExportError(f"No {HISTORY_FILE_PATTERN} file found in the ZIP.")
@@ -64,6 +68,19 @@ def iter_track_entries(export_zip: IO[bytes]) -> Iterator[TrackEntry]:
                     f"The history files exceed {MAX_TOTAL_HISTORY_BYTES} bytes once unzipped."
                 )
             yield from _parse_track_entries(raw_history, history_file.filename)
+
+
+def count_audio_history_files(export_zip: IO[bytes]) -> int:
+    """Number of audio history files in the export. Reads the ZIP's file list only."""
+    with _open_archive(export_zip) as archive:
+        return len(_audio_history_files(archive))
+
+
+def _open_archive(export_zip: IO[bytes]) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(export_zip)
+    except zipfile.BadZipFile:
+        raise InvalidExportError("The upload is not a ZIP file.") from None
 
 
 def _audio_history_files(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
@@ -119,4 +136,22 @@ def _parse_track_entries(raw_history: bytes, file_name: str) -> Iterator[TrackEn
             track_name=track_name,
             artist_name=entry.get("master_metadata_album_artist_name") or "",
             ms_played=ms_played,
+            ended_at=_parse_timestamp(entry.get("ts"), file_name),
+            album_name=entry.get("master_metadata_album_album_name") or "",
+            reason_start=entry.get("reason_start") or "unknown",
+            reason_end=entry.get("reason_end") or "unknown",
+            shuffle=entry.get("shuffle") is True,
+            platform=platform_family(entry.get("platform")),
+            offline=entry.get("offline") is True,
         )
+
+
+def _parse_timestamp(timestamp: object, file_name: str) -> datetime:
+    """Parse `ts` such as "2026-02-05T08:34:23Z" into an aware UTC datetime."""
+    try:
+        ended_at = datetime.fromisoformat(timestamp)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise InvalidExportError(
+            f"{file_name} contains a track entry without a valid ts."
+        ) from None
+    return ended_at.replace(tzinfo=UTC) if ended_at.tzinfo is None else ended_at.astimezone(UTC)

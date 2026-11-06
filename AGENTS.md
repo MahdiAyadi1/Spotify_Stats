@@ -4,7 +4,7 @@ Context for AI coding agents (and humans) working on this repository.
 
 ## What this project is
 
-**Spotify Stats** is a web app. A user uploads the ZIP of their Spotify _Extended streaming history_ export and gets statistics and charts about their listening.
+**Spotify Stats** is a web app. A user uploads the ZIP of their Spotify *Extended streaming history* export and gets statistics and charts about their listening.
 
 - **MVP:** top tracks only (ranked list of every track, plays and listening time).
 - **Later:** most skipped tracks (for fun), top artists, listening history over time, and further charts.
@@ -21,22 +21,29 @@ api/                     Python Azure Function (the managed API)
   spotify_stats/         statistics logic, no Azure imports
     constants.py         MIN_PLAY_MS, history file pattern, unzipped size limits
     history.py           reads track entries from the export ZIP
-    aggregation.py       top tracks, most skipped
+    aggregation.py       one pass over the entries, feeds every collector, assembles the response
+    options.py           query parameters of /api/stats (timezone, date range, thresholds, merge)
+    platforms.py         groups the free-text platform field into device families
+    listen.py            one track entry, classified as play or skip and placed in the timezone
+    tallies.py           plays, time and skips per track, artist or album
+    rankings.py          ranked lists: top tracks, artists, albums, most skipped
+    timeline.py          months, years, hour of day, weekday
+    yearly.py            most played track of each year
+    discovery.py         new tracks and artists per month
+    obsessions.py        most plays of one track in a day or a week
+    sessions.py          listening sessions
+    habits.py            how music starts and ends, devices, shuffle, offline
     service.py           the job of /api/stats: bytes in, HTTP status and JSON body out
   tests/                 pytest unit tests
     export_builders.py   helpers that build fake export entries and ZIPs
+    entries.py           helpers that build TrackEntry and Listen objects
   requirements.txt       runtime dependencies only (deployed)
   requirements-dev.txt   adds pytest and ruff
 web/                     React + TypeScript front end, built with Vite
-  src/api.ts             types mirroring the API contract and the upload request helper
-  src/App.tsx            upload, loading / error / result states, summary tiles, podium,
-                         ranking toggle, search, theme selection and most-skipped UI
-  src/components/        reusable UI components such as TrackList
-  src/components/TrackList.tsx ranked table with pagination and global ranks
-  src/lib/trackView.ts   sorting and filtering logic for the full ranked track list
-  src/format.ts          formatting helpers for counts and listening time
-  src/styles.css         main app styling including light/dark themes and podium layout
-  src/tests/             Vitest coverage for API, formatting and ranking/search logic
+  src/api.ts             types mirroring the API contract, and the upload call
+  src/format.ts          formatting of counts and listening time
+  src/App.tsx            upload, loading / error / result states, summary
+  src/components/        TrackList (ranked table, 100 rows at a time)
   package-lock.json      committed, so installs are reproducible
   public/staticwebapp.config.json   sets the API runtime (python:3.11)
 ```
@@ -58,7 +65,7 @@ Do not revisit these without asking.
 - **Web app only.** There is no CLI. An earlier plan had a CLI plus a web page sharing a TypeScript core; that plan was dropped.
 - **Front end:** React with TypeScript, built to static files.
 - **Back end:** the statistics logic runs in a **Python Azure Function** (not in the browser, not in TypeScript).
-- **Hosting:** Azure Static Web Apps, **Free plan**, with the function deployed as its _managed API_ (`/api`).
+- **Hosting:** Azure Static Web Apps, **Free plan**, with the function deployed as its *managed API* (`/api`).
 - **Development environment:** a dev container. Node is not installed on the developer's machine, so every command must run inside the container.
 - **No raw-data storage.** The function is stateless: receive, compute, return. It does not store, log or forward the uploaded data.
 
@@ -77,27 +84,70 @@ Browser (React)                         Azure Static Web Apps
 
 Keep the front end and the function independent: they only share the JSON contract below.
 
-### API contract (draft)
+### API contract
 
-`POST /api/stats` with the ZIP as the request body.
+`POST /api/stats` with the ZIP as the request body. Optional query parameters (all validated; an unknown or invalid one gives 400):
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `min_play_ms` | `30000` | Listening needed to count as a play; shorter entries are skips (0 to 600000) |
+| `min_skips` | `1` | Skips a track needs to appear in `most_skipped` |
+| `timezone` | `UTC` | IANA name such as `Africa/Tunis`. Months, days, hours, weekdays and sessions follow it. The browser should send its own |
+| `date_from`, `date_to` | none | `YYYY-MM-DD`, inclusive, in that timezone. Filter **every** statistic except `overview` |
+| `merge_duplicates` | `false` | `true` groups tracks by name and artist (case-insensitive) instead of by Spotify URI |
+
+Response (200), field by field. All lists contain every item; the UI limits and searches. Dates are `YYYY-MM-DD` in the requested timezone; `ms_*` values are milliseconds.
 
 ```json
 {
-  "summary": { "total_plays": 0, "total_ms_played": 0, "distinct_tracks": 0 },
-  "top_tracks": [
-    { "rank": 1, "track": "", "artist": "", "plays": 0, "ms_played": 0 }
-  ]
+  "options":  { "min_play_ms": 30000, "min_skips": 1, "timezone": "UTC", "date_from": null, "date_to": null, "merge_duplicates": false },
+  "overview": { "history_files": 5, "track_entries": 0, "first_entry": "2022-01-01", "last_entry": "2026-02-05" },
+  "summary":  { "total_plays": 0, "total_ms_played": 0, "total_skips": 0, "distinct_tracks": 0, "distinct_artists": 0 },
+  "top_tracks":   [ { "rank": 1, "track": "", "artist": "", "plays": 0, "ms_played": 0, "skips": 0, "skip_rate": 0.0, "first_played": "2022-03-05" } ],
+  "top_artists":  [ { "rank": 1, "artist": "", "plays": 0, "ms_played": 0, "skips": 0, "skip_rate": 0.0, "first_played": "2022-03-05" } ],
+  "top_albums":   [ { "rank": 1, "album": "", "artist": "", "plays": 0, "ms_played": 0 } ],
+  "most_skipped": [ { "rank": 1, "track": "", "artist": "", "skips": 0, "plays": 0, "skip_rate": 0.0 } ],
+  "yearly_top_tracks": [ { "year": 2022, "track": "", "artist": "", "plays": 0, "ms_played": 0 } ],
+  "discovery": [ { "month": "2022-03", "new_tracks": 0, "new_artists": 0 } ],
+  "timeline": {
+    "months": [ { "month": "2022-03", "plays": 0, "ms_played": 0 } ],
+    "years":  [ { "year": 2022, "plays": 0, "ms_played": 0 } ]
+  },
+  "clock": {
+    "hours":    [ { "hour": 0, "plays": 0, "ms_played": 0 } ],
+    "weekdays": [ { "weekday": 0, "plays": 0, "ms_played": 0 } ]
+  },
+  "obsessions": {
+    "days":  [ { "rank": 1, "track": "", "artist": "", "period_start": "2022-03-07", "plays": 0 } ],
+    "weeks": [ { "rank": 1, "track": "", "artist": "", "period_start": "2022-03-07", "plays": 0 } ]
+  },
+  "sessions": { "count": 0, "average_ms": 0, "longest": { "started_at": "2022-03-05T09:57:00+01:00", "duration_ms": 0, "plays": 0 } },
+  "habits": {
+    "reason_start": [ { "reason": "clickrow", "plays": 0, "skips": 0 } ],
+    "reason_end":   [ { "reason": "trackdone", "plays": 0, "skips": 0 } ],
+    "platforms":    [ { "platform": "iOS", "plays": 0, "ms_played": 0 } ],
+    "shuffle":      { "shuffled_plays": 0, "other_plays": 0 },
+    "offline":      { "offline_plays": 0, "online_plays": 0 }
+  }
 }
 ```
 
-`most_skipped` is a list of tracks ranked by number of skips (`{ rank, track, artist, skips }`). It is a fun extra, not part of the MVP.
+Errors: 400 `{"error": "..."}` for an invalid export or an invalid parameter, 413 for an export over the size limits.
 
-Ranking rules (implemented in `aggregation.py`):
+Rules (implemented in `spotify_stats/`):
 
-- `top_tracks`: most plays first, ties broken by longer listening time, then by name. `rank` is the position in the list starting at 1 (no shared ranks). A track that was only ever skipped is not in `top_tracks`, and `distinct_tracks` counts only tracks with at least one play.
-- `most_skipped`: most skips first, ties go to the track with fewer plays, then by name. It contains every track skipped at least once; the UI decides how many to show.
+- **Plays and time:** only plays add to `plays`, `ms_played`, the timeline, the clock, obsessions, sessions and the platform, shuffle and offline counts. Skips only add to `skips`, `skip_rate` (skips / (plays + skips)), `most_skipped` and the reason counts of `habits`.
+- **`top_tracks`, `top_artists`, `top_albums`:** most plays first, ties go to the longer listening time, then to the name. `rank` is the position starting at 1 (no shared ranks). Only items played at least once appear; `distinct_*` counts them. Artists with no name and albums with no name are left out of those two lists. `first_played` is the earliest play in the analysed range.
+- **`most_skipped`:** most skips first, ties go to the track with fewer plays, then to the name. Only tracks with at least `min_skips` skips.
+- **`yearly_top_tracks`:** one entry per year with plays, most plays first, ties go to the longer listening time.
+- **`discovery`:** counts tracks and artists by the month of their `first_played`. "New" means first played within the analysed range, whatever came before. Months without a discovery are included as zeros; `timeline.months` is also filled with zeros between the first and the last month.
+- **`clock`:** `hours` always has 24 entries, `weekdays` always 7 (0 = Monday). Time of day is when the track stopped (`ts`).
+- **`obsessions`:** each track appears once with its best day (or its best week, weeks start on Monday). At most 10 entries (`OBSESSION_LIMIT`).
+- **`sessions`:** plays no more than 30 minutes apart (`SESSION_GAP_MS`) belong to the same session. A play starts at `ts` minus `ms_played`. `duration_ms` runs from the start of the first play to the end of the last. `longest` is `null` without plays.
+- **`habits`:** reasons are Spotify's own values (`trackdone`, `fwdbtn`, `clickrow`, ...). Platforms are grouped in families: iOS, Android, Windows, macOS, Linux, Web player, Other. A missing `shuffle` or `offline` counts as false.
+- **`overview`:** about the whole export, before the date filter.
 
-`top_tracks` contains **every** track that was played at least once, sorted by rank. The UI does the searching and limiting, so there is no top-N cut-off in the API. Changing this contract means updating both sides and this file.
+Changing this contract means updating `web/src/api.ts` and this file.
 
 ### Input data
 
@@ -107,6 +157,7 @@ Spotify extended streaming history contains files named `Streaming_History_Audio
 - `ms_played`: milliseconds played
 - `master_metadata_track_name`, `master_metadata_album_artist_name`, `master_metadata_album_album_name`
 - `spotify_track_uri`: stable track identifier, use it (not name + artist) to group plays of the same track
+- `reason_start`, `reason_end`, `shuffle`, `offline`, `platform`: listening habits (the platform text is grouped into a family, see `platforms.py`)
 
 Podcast and audiobook entries have a `null` track name and use `episode_*` / `audiobook_*` fields instead. They are not tracks and must be skipped.
 
@@ -125,16 +176,12 @@ Entries also contain `ip_addr` and `conn_country`. Never read, log or return the
 - **Deployed code size:** the function app is limited to about 30 MB. Keep dependencies light and **do not use pandas**. Plain Python (`zipfile`, `json`, `collections.Counter`) is enough for the current scope.
 - **Memory:** unzipped data is large. Process one JSON file from the ZIP at a time, keep only the fields needed per play, and discard each file before reading the next. Check `ZipInfo.file_size` and reject absurdly large entries (zip bomb protection).
 - **Upload size:** no request-size limit is documented for managed functions. Test with the real export on a deployed stub early.
+- **Time zones:** `zoneinfo` needs the `tzdata` package on the deployed function (it is in `requirements.txt`). Do not remove it.
 - **Runtime:** Python 3.11 (`apiRuntime: "python:3.11"` in `staticwebapp.config.json`).
 
-## Front end layout
+## Front end (planned UI)
 
-- Summary tiles at the top show the overall totals.
-- A podium for the top 3 tracks sits above the main ranked list.
-- The main list ranks tracks by either number of plays or total listening time and supports search over the full track list.
-- Each track in search results shows its **global rank** in the full list, not its position in the filtered results.
-- A light / dark theme toggle defaults to the user's system preference.
-- A Most skipped section shows the top 20 tracks from the API response.
+Summary tiles, a podium for the top 3, a ranked bar list of all tracks, a plays / listening-time toggle, a dark / light theme, and search that shows each track's **global rank**.
 
 ## Code conventions
 

@@ -9,11 +9,11 @@ from tests.export_builders import make_export_zip, track_play
 REGISTERED_FUNCTIONS = {function.get_function_name(): function for function in app.get_functions()}
 
 
-def call(function_name: str, body: bytes) -> func.HttpResponse:
+def call(function_name: str, body: bytes, params: dict | None = None) -> func.HttpResponse:
     """Call a registered function the way the Azure runtime would."""
     function = REGISTERED_FUNCTIONS[function_name]
     request = func.HttpRequest(
-        method="POST", url=f"/api/{function_name}", body=body, headers={}, params={}
+        method="POST", url=f"/api/{function_name}", body=body, headers={}, params=params or {}
     )
     return function.get_user_function()(request)
 
@@ -39,3 +39,12 @@ def test_upload_check_reports_the_number_of_bytes_received():
     response = call("upload_check", b"12345")
 
     assert json.loads(response.get_body()) == {"received_zip_bytes": 5}
+
+
+def test_stats_passes_the_query_parameters_to_the_service():
+    export_zip = make_export_zip({"Streaming_History_Audio_2022.json": [track_play()]})
+
+    response = call("stats", export_zip.getvalue(), params={"timezone": "Mars/Base"})
+
+    assert response.status_code == 400
+    assert "timezone" in json.loads(response.get_body())["error"].lower()

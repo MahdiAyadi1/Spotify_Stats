@@ -16,7 +16,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 @app.route(route="stats", methods=["POST"])
 def stats(req: func.HttpRequest) -> func.HttpResponse:
     """Compute the listening statistics for a Spotify export ZIP."""
-    result = build_stats_result(req.get_body())
+    result = build_stats_result(req.get_body(), req.params)
     return func.HttpResponse(
         json.dumps(result.body),
         mimetype="application/json",

@@ -13,3 +13,9 @@ HISTORY_FILE_PATTERN = "Streaming_History_Audio_*.json"
 # Measured on the bytes actually read, not on the sizes declared in the ZIP.
 MAX_HISTORY_FILE_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_HISTORY_BYTES = 500 * 1024 * 1024
+
+# Two plays further apart than this belong to different listening sessions.
+SESSION_GAP_MS = 30 * 60 * 1000
+
+# Length of the lists of obsessions (most plays of one track in a single day or week).
+OBSESSION_LIMIT = 10

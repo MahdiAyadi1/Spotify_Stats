@@ -1,11 +1,12 @@
 from flask import Flask, request
+
 from spotify_stats.service import build_stats_result
 
 app = Flask(__name__)
 
 @app.post("/api/stats")
 def stats():
-    result = build_stats_result(request.data)
+    result = build_stats_result(request.data, request.args.to_dict())
     return result.body, result.status
 
 if __name__ == "__main__":
